@@ -52,15 +52,23 @@ paths:
               playlist: false
       responses:
         '202':
-          description: Job accepted
+          description: |
+            Job accepted. Streams have already been resolved synchronously; the
+            response body is the initial Job snapshot (state=`queued` or
+            `downloading`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '400': { $ref: '#/components/responses/Error' }
+        '502':
+          description: Extraction failed (URL unsupported, network error, site
+            changed, etc.). No job is created.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  id: { type: string, format: uuid }
-        '400':
-          $ref: '#/components/responses/Error'
+                  error: { type: string }
 
   /jobs/{id}:
     parameters:

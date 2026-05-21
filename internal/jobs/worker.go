@@ -95,46 +95,33 @@ func (p *Pool) run(id string) {
 		fail(j, fmt.Errorf("mkdir job dir: %w", err))
 		return
 	}
-	j.update(func(j *Job) {
-		j.OutputDir = jobDir
-		j.State = StateExtracting
-	})
+	j.update(func(j *Job) { j.OutputDir = jobDir })
 
-	data, err := safeExtract(j.Req)
-	if err != nil {
-		fail(j, fmt.Errorf("extract: %w", err))
-		return
-	}
-	if len(data) == 0 || data[0] == nil {
-		fail(j, fmt.Errorf("no streams extracted (site likely unsupported)"))
-		return
-	}
-	d := data[0]
-	if d.Err != nil {
-		fail(j, fmt.Errorf("extract: %w", d.Err))
-		return
-	}
-	if len(d.Streams) == 0 {
-		fail(j, fmt.Errorf("no streams returned for %q", d.URL))
-		return
-	}
-
-	streamKey := j.Req.Stream
-	if streamKey == "" || d.Streams[streamKey] == nil {
-		streamKey = bestStream(d)
-	}
-	s, ok := d.Streams[streamKey]
-	if !ok || s == nil {
-		fail(j, fmt.Errorf("stream %q not found", streamKey))
-		return
+	d := j.Data
+	streamKey := j.StreamKey
+	if d == nil {
+		// Fallback: extraction wasn't done up-front. This path also handles
+		// any future callers that submit jobs without pre-resolving.
+		j.update(func(j *Job) { j.State = StateExtracting })
+		data, key, err := Resolve(j.Req)
+		if err != nil {
+			fail(j, err)
+			return
+		}
+		d = data
+		streamKey = key
+		j.update(func(j *Job) {
+			j.Data = d
+			j.StreamKey = key
+			j.Title = d.Title
+			j.Site = d.Site
+			if s := d.Streams[key]; s != nil {
+				j.BytesTotal = s.Size
+			}
+		})
 	}
 
-	j.update(func(j *Job) {
-		j.State = StateDownloading
-		j.Title = d.Title
-		j.Site = d.Site
-		j.BytesTotal = s.Size
-	})
+	j.update(func(j *Job) { j.State = StateDownloading })
 
 	progressCtx, stopProgress := context.WithCancel(j.ctx)
 	go trackProgress(progressCtx, j, jobDir)
@@ -200,6 +187,34 @@ func safeExtract(req Request) (data []*extractors.Data, err error) {
 		Playlist: req.Playlist,
 		Cookie:   req.Cookie,
 	})
+}
+
+// Resolve runs lux's extractor synchronously and returns the chosen Data + stream key.
+// Surfaces every failure mode as an error so callers can return a proper HTTP response
+// instead of accepting an unrunnable job.
+func Resolve(req Request) (*extractors.Data, string, error) {
+	data, err := safeExtract(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("extract: %w", err)
+	}
+	if len(data) == 0 || data[0] == nil {
+		return nil, "", fmt.Errorf("no streams extracted (site likely unsupported)")
+	}
+	d := data[0]
+	if d.Err != nil {
+		return nil, "", fmt.Errorf("extract: %w", d.Err)
+	}
+	if len(d.Streams) == 0 {
+		return nil, "", fmt.Errorf("no streams returned for %q", d.URL)
+	}
+	key := req.Stream
+	if key == "" || d.Streams[key] == nil {
+		key = bestStream(d)
+	}
+	if s := d.Streams[key]; s == nil {
+		return nil, "", fmt.Errorf("stream %q not found", key)
+	}
+	return d, key, nil
 }
 
 func fail(j *Job, err error) {

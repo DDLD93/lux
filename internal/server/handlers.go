@@ -47,9 +47,23 @@ func (h *handlers) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Resolve streams synchronously so extraction failures surface as a proper
+	// HTTP error instead of a 202 followed by a silent async "failed" state.
+	data, streamKey, err := jobs.Resolve(req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
 	j := h.store.Create(req)
+	j.Data = data
+	j.StreamKey = streamKey
+	j.Title = data.Title
+	j.Site = data.Site
+	if s := data.Streams[streamKey]; s != nil {
+		j.BytesTotal = s.Size
+	}
 	h.pool.Submit(j.ID)
-	writeJSON(w, http.StatusAccepted, map[string]string{"id": j.ID})
+	writeJSON(w, http.StatusAccepted, j.Snapshot())
 }
 
 func (h *handlers) listJobs(w http.ResponseWriter, _ *http.Request) {

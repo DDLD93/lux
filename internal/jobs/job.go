@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/iawia002/lux/extractors"
 )
 
 type State string
@@ -39,14 +41,16 @@ type Job struct {
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 
-	Req    Request            `json:"-"`
-	mu     sync.Mutex         `json:"-"`
-	ctx    context.Context    `json:"-"`
-	cancel context.CancelFunc `json:"-"`
-	done   chan struct{}      `json:"-"`
+	Req       Request            `json:"-"`
+	Data      *extractors.Data   `json:"-"`
+	StreamKey string             `json:"-"`
+	mu        sync.Mutex         `json:"-"`
+	ctx       context.Context    `json:"-"`
+	cancel    context.CancelFunc `json:"-"`
+	done      chan struct{}      `json:"-"`
 }
 
-func (j *Job) snapshot() Job {
+func (j *Job) Snapshot() Job {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return Job{

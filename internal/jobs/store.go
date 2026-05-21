@@ -54,7 +54,7 @@ func (s *Store) Snapshot(id string) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
-	return j.snapshot(), nil
+	return j.Snapshot(), nil
 }
 
 func (s *Store) List() []Job {
@@ -62,7 +62,7 @@ func (s *Store) List() []Job {
 	defer s.mu.RUnlock()
 	out := make([]Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
-		out = append(out, j.snapshot())
+		out = append(out, j.Snapshot())
 	}
 	return out
 }
