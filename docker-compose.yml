@@ -1,0 +1,16 @@
+services:
+  lux-api:
+    build: .
+    image: lux-api:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - lux-data:/data
+    environment:
+      LUX_OUTPUT_DIR: /data/downloads
+      LUX_WORKERS: "4"
+      LUX_ADDR: ":8080"
+    restart: unless-stopped
+
+volumes:
+  lux-data:

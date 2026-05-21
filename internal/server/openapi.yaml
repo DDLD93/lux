@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: lux-api
+  version: 0.1.0
+  description: |
+    HTTP wrapper around the [lux](https://github.com/iawia002/lux) video
+    download library. Submit a URL to `POST /jobs`, then poll
+    `GET /jobs/{id}` until `state == done` and fetch the file from
+    `GET /jobs/{id}/file`. Job state is held in memory and is lost when the
+    container restarts.
+
+    Cancellation (`DELETE /jobs/{id}`) is best-effort: lux's downloader does
+    not accept a `context.Context`, so an in-flight HTTP transfer will end on
+    its own before the job is marked `canceled`.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /jobs:
+    get:
+      summary: List all jobs
+      responses:
+        '200':
+          description: Array of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Job' }
+    post:
+      summary: Start a new download job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobRequest' }
+            example:
+              url: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+              stream: ""
+              playlist: false
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /jobs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/JobID'
+    get:
+      summary: Get job status (poll this for progress)
+      responses:
+        '200':
+          description: Current job snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      summary: Cancel a job and remove its partial files
+      responses:
+        '204':
+          description: Canceled
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /jobs/{id}/file:
+    parameters:
+      - $ref: '#/components/parameters/JobID'
+    get:
+      summary: Download the resulting file (only when state=done)
+      responses:
+        '200':
+          description: File stream
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /extract:
+    post:
+      summary: Resolve stream metadata without downloading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobRequest' }
+      responses:
+        '200':
+          description: lux extractor output
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+components:
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+
+  schemas:
+    JobRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Source page URL recognised by a lux extractor
+        stream:
+          type: string
+          description: Stream key (omit to pick the largest stream)
+        playlist:
+          type: boolean
+          default: false
+        cookie:
+          type: string
+          description: Cookie string forwarded to the extractor (for gated content)
+
+    Job:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        state:
+          type: string
+          enum: [queued, extracting, downloading, done, failed, canceled]
+        percent: { type: number, format: float, minimum: 0, maximum: 100 }
+        bytes_downloaded: { type: integer, format: int64 }
+        bytes_total: { type: integer, format: int64 }
+        title: { type: string }
+        site: { type: string }
+        output_filename: { type: string }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
