@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>lux-api &middot; downloads</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #161a22; --panel2: #1c2030;
+      --text: #e6e6e6; --muted: #9aa3b2; --accent: #7cc4ff;
+      --border: #232936; --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 1.5rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: var(--bg); color: var(--text); }
+    main { max-width: 980px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+    header h1 { margin: 0; font-size: 1.4rem; }
+    header .right { display: flex; align-items: center; gap: 1rem; font-size: .9rem; color: var(--muted); }
+    header a { color: var(--accent); text-decoration: none; }
+    .health { display: inline-flex; align-items: center; gap: .4rem; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1.1rem; margin-bottom: 1.2rem; }
+    form .row { display: flex; gap: .6rem; flex-wrap: wrap; }
+    input[type=text] {
+      flex: 1 1 320px; min-width: 0; padding: .6rem .8rem;
+      background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; font-size: .95rem;
+    }
+    input[type=text]:focus { outline: none; border-color: var(--accent); }
+    button {
+      padding: .6rem 1rem; background: var(--accent); color: #0a0c11;
+      border: 0; border-radius: 6px; font-weight: 600; cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
+
+    .form-err { color: var(--err); margin-top: .6rem; font-size: .9rem; min-height: 1.1em; }
+
+    .jobs h2 { margin: 0 0 .8rem; font-size: 1.05rem; color: var(--muted); font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+    .job { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1rem; margin-bottom: .7rem; }
+    .job-head { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
+    .job-title { font-weight: 600; word-break: break-all; }
+    .job-url { color: var(--muted); font-size: .82rem; word-break: break-all; margin-top: .15rem; }
+    .badge {
+      display: inline-block; font-size: .72rem; padding: .15rem .55rem; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--panel2); color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+    }
+    .badge.queued, .badge.extracting { color: var(--warn); border-color: var(--warn); }
+    .badge.downloading { color: var(--accent); border-color: var(--accent); }
+    .badge.done { color: var(--ok); border-color: var(--ok); }
+    .badge.failed { color: var(--err); border-color: var(--err); }
+    .badge.canceled { color: var(--muted); }
+
+    .bar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin: .8rem 0 .4rem; }
+    .bar-fill { height: 100%; background: var(--accent); transition: width .3s ease; }
+    .bar-fill.done { background: var(--ok); }
+    .bar-fill.failed { background: var(--err); }
+    .job-meta { display: flex; flex-wrap: wrap; gap: 1.2rem; font-size: .83rem; color: var(--muted); margin-bottom: .6rem; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .actions a, .actions button { font-size: .85rem; padding: .4rem .8rem; border-radius: 6px; text-decoration: none; }
+    .actions a.dl { background: var(--ok); color: #0a0c11; font-weight: 600; }
+    .error-line { color: var(--err); font-size: .85rem; margin-top: .4rem; word-break: break-word; }
+    .empty { text-align: center; color: var(--muted); padding: 2.5rem 1rem; border: 1px dashed var(--border); border-radius: 8px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>lux-api &middot; downloads</h1>
+    <div class="right">
+      <span class="health" title="GET /healthz"><span id="dot" class="dot"></span><span id="dot-text">checking…</span></span>
+      <a href="/">home</a>
+      <a href="/swagger">swagger</a>
+    </div>
+  </header>
+
+  <section class="card">
+    <form id="submit-form">
+      <div class="row">
+        <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" required />
+        <input id="stream" type="text" placeholder="stream (optional)" style="flex: 0 1 180px;" />
+        <button id="submit-btn" type="submit">Start download</button>
+      </div>
+      <div id="form-err" class="form-err"></div>
+    </form>
+  </section>
+
+  <section class="jobs">
+    <h2>Jobs</h2>
+    <div id="jobs-list"></div>
+  </section>
+</main>
+
+<script>
+const API = "{{.ServerURL}}";
+
+const dot = document.getElementById('dot');
+const dotText = document.getElementById('dot-text');
+async function checkHealth() {
+  try {
+    const r = await fetch(API + '/healthz');
+    const j = await r.json();
+    if (j.ok) { dot.className = 'dot ok'; dotText.textContent = 'healthy'; }
+    else { dot.className = 'dot err'; dotText.textContent = 'unhealthy'; }
+  } catch {
+    dot.className = 'dot err'; dotText.textContent = 'offline';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 5000);
+
+const list = document.getElementById('jobs-list');
+const form = document.getElementById('submit-form');
+const urlInput = document.getElementById('url');
+const streamInput = document.getElementById('stream');
+const submitBtn = document.getElementById('submit-btn');
+const formErr = document.getElementById('form-err');
+
+function fmtBytes(n) {
+  if (!n || n < 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + u[i];
+}
+function fmtElapsed(iso) {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+}
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderJob(j) {
+  const pct = Math.max(0, Math.min(100, j.percent || 0));
+  const active = j.state === 'queued' || j.state === 'extracting' || j.state === 'downloading';
+  const barClass = j.state === 'done' ? 'done' : j.state === 'failed' ? 'failed' : '';
+  const title = j.title || j.url || j.id;
+  return `
+    <div class="job" data-id="${j.id}">
+      <div class="job-head">
+        <div>
+          <div class="job-title">${escapeHtml(title)}</div>
+          <div class="job-url">${escapeHtml(j.url || '')}</div>
+        </div>
+        <span class="badge ${j.state}">${j.state}</span>
+      </div>
+      <div class="bar"><div class="bar-fill ${barClass}" style="width:${pct}%"></div></div>
+      <div class="job-meta">
+        <span>${pct.toFixed(1)}%</span>
+        <span>${fmtBytes(j.bytes_downloaded)} / ${j.bytes_total ? fmtBytes(j.bytes_total) : '?'}</span>
+        <span>elapsed ${fmtElapsed(j.created_at)}</span>
+        ${j.site ? `<span>site: ${escapeHtml(j.site)}</span>` : ''}
+      </div>
+      <div class="actions">
+        ${j.state === 'done' ? `<a class="dl" href="${API}/jobs/${j.id}/file" download>Download</a>` : ''}
+        ${active ? `<button class="danger" data-cancel="${j.id}">Cancel</button>` : ''}
+      </div>
+      ${j.error ? `<div class="error-line">${escapeHtml(j.error)}</div>` : ''}
+    </div>`;
+}
+
+async function refresh() {
+  let r;
+  try { r = await fetch(API + '/jobs'); }
+  catch { return; }
+  if (!r.ok) return;
+  const jobs = await r.json();
+  jobs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  if (jobs.length === 0) {
+    list.innerHTML = '<div class="empty">No jobs yet. Paste a URL above to start.</div>';
+  } else {
+    list.innerHTML = jobs.map(renderJob).join('');
+  }
+  // schedule next refresh
+  const anyActive = jobs.some(j => j.state === 'queued' || j.state === 'extracting' || j.state === 'downloading');
+  scheduleRefresh(anyActive ? 1000 : 5000);
+}
+
+let refreshTimer = null;
+function scheduleRefresh(ms) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refresh, ms);
+}
+
+list.addEventListener('click', async (e) => {
+  const id = e.target?.dataset?.cancel;
+  if (!id) return;
+  e.target.disabled = true;
+  try {
+    const r = await fetch(API + '/jobs/' + id, { method: 'DELETE' });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      alert('Cancel failed: ' + (j.error || r.statusText));
+    }
+  } catch (err) { alert('Cancel failed: ' + err); }
+  refresh();
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  formErr.textContent = '';
+  const url = urlInput.value.trim();
+  const stream = streamInput.value.trim();
+  if (!url) { formErr.textContent = 'URL is required'; return; }
+  submitBtn.disabled = true;
+  try {
+    const r = await fetch(API + '/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url, stream: stream || undefined }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      formErr.textContent = j.error || ('HTTP ' + r.status);
+    } else {
+      urlInput.value = '';
+      streamInput.value = '';
+      refresh();
+    }
+  } catch (err) {
+    formErr.textContent = 'Request failed: ' + err;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+refresh();
+</script>
+</body>
+</html>

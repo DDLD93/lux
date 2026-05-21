@@ -5,7 +5,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "PowerShell(go version *)",
       "PowerShell(go mod *)",
-      "PowerShell(go build *)"
+      "PowerShell(go build *)",
+      "PowerShell(go list *)",
+      "PowerShell(go *)"
     ]
   }
 }

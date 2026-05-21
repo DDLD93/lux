@@ -3,8 +3,11 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/iawia002/lux/extractors"
@@ -12,20 +15,36 @@ import (
 	"github.com/umarj/lux-api/internal/jobs"
 )
 
+const maxBodyBytes = 64 * 1024
+
 type handlers struct {
 	store  *jobs.Store
 	pool   *jobs.Pool
 	outDir string
 }
 
-func (h *handlers) createJob(w http.ResponseWriter, r *http.Request) {
+func decodeRequest(r *http.Request) (jobs.Request, error) {
 	var req jobs.Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return req, fmt.Errorf("invalid JSON body: %w", err)
 	}
+	req.URL = strings.TrimSpace(req.URL)
 	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "field 'url' is required")
+		return req, errors.New("field 'url' is required")
+	}
+	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+		return req, errors.New("field 'url' must be an http(s) URL")
+	}
+	return req, nil
+}
+
+func (h *handlers) createJob(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	j := h.store.Create(req)
@@ -57,7 +76,12 @@ func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	snap, err := h.store.Snapshot(id)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"id": id, "state": string(jobs.StateCanceled)})
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (h *handlers) downloadFile(w http.ResponseWriter, r *http.Request) {
@@ -72,33 +96,42 @@ func (h *handlers) downloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if snap.OutputFilename == "" {
-		writeError(w, http.StatusInternalServerError, "no output file recorded")
+		writeError(w, http.StatusInternalServerError, "no output file recorded for job")
 		return
 	}
 	path := filepath.Join(h.outDir, snap.ID, snap.OutputFilename)
+	if _, err := os.Stat(path); err != nil {
+		writeError(w, http.StatusGone, "output file no longer available")
+		return
+	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+snap.OutputFilename+`"`)
 	http.ServeFile(w, r, path)
 }
 
 func (h *handlers) extract(w http.ResponseWriter, r *http.Request) {
-	var req jobs.Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	req, err := decodeRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "field 'url' is required")
-		return
-	}
-	data, err := extractors.Extract(req.URL, extractors.Options{
-		Playlist: req.Playlist,
-		Cookie:   req.Cookie,
-	})
+	data, err := safeExtract(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
+}
+
+func safeExtract(req jobs.Request) (data []*extractors.Data, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("extract panic: %v", r)
+		}
+	}()
+	return extractors.Extract(req.URL, extractors.Options{
+		Playlist: req.Playlist,
+		Cookie:   req.Cookie,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -79,6 +79,11 @@ func (p *Pool) run(id string) {
 		return
 	}
 	defer close(j.done)
+	defer func() {
+		if r := recover(); r != nil {
+			fail(j, fmt.Errorf("panic: %v", r))
+		}
+	}()
 
 	if j.ctx.Err() != nil {
 		j.update(func(j *Job) { j.State = StateCanceled })
@@ -95,16 +100,13 @@ func (p *Pool) run(id string) {
 		j.State = StateExtracting
 	})
 
-	data, err := extractors.Extract(j.Req.URL, extractors.Options{
-		Playlist: j.Req.Playlist,
-		Cookie:   j.Req.Cookie,
-	})
+	data, err := safeExtract(j.Req)
 	if err != nil {
 		fail(j, fmt.Errorf("extract: %w", err))
 		return
 	}
 	if len(data) == 0 || data[0] == nil {
-		fail(j, fmt.Errorf("no streams extracted"))
+		fail(j, fmt.Errorf("no streams extracted (site likely unsupported)"))
 		return
 	}
 	d := data[0]
@@ -112,13 +114,17 @@ func (p *Pool) run(id string) {
 		fail(j, fmt.Errorf("extract: %w", d.Err))
 		return
 	}
+	if len(d.Streams) == 0 {
+		fail(j, fmt.Errorf("no streams returned for %q", d.URL))
+		return
+	}
 
 	streamKey := j.Req.Stream
-	if streamKey == "" {
+	if streamKey == "" || d.Streams[streamKey] == nil {
 		streamKey = bestStream(d)
 	}
 	s, ok := d.Streams[streamKey]
-	if !ok {
+	if !ok || s == nil {
 		fail(j, fmt.Errorf("stream %q not found", streamKey))
 		return
 	}
@@ -146,7 +152,14 @@ func (p *Pool) run(id string) {
 	})
 
 	doneCh := make(chan error, 1)
-	go func() { doneCh <- dl.Download(d) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				doneCh <- fmt.Errorf("download panic: %v", r)
+			}
+		}()
+		doneCh <- dl.Download(d)
+	}()
 
 	select {
 	case err = <-doneCh:
@@ -175,6 +188,18 @@ func (p *Pool) run(id string) {
 		}
 	})
 	log.Printf("job %s done: %s", j.ID, outName)
+}
+
+func safeExtract(req Request) (data []*extractors.Data, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("extract panic: %v", r)
+		}
+	}()
+	return extractors.Extract(req.URL, extractors.Options{
+		Playlist: req.Playlist,
+		Cookie:   req.Cookie,
+	})
 }
 
 func fail(j *Job, err error) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/umarj/lux-api/internal/jobs"
+	_ "github.com/umarj/lux-api/internal/lux" // register lux site extractors
 	"github.com/umarj/lux-api/internal/server"
 )
 

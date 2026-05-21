@@ -5,3 +5,4 @@
 *.md
 data/
 bin/
+.claude/
