@@ -28,9 +28,10 @@ func main() {
 	defer pool.Stop()
 
 	addr := envOr("LUX_ADDR", ":8080")
+	serverURL := envOr("LUX_SERVER_URL", "http://localhost:8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.New(store, pool, outDir),
+		Handler:           server.New(store, pool, outDir, serverURL),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("lux-api listening on %s (output=%s, workers=%d)", addr, outDir, workers)

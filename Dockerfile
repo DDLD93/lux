@@ -14,7 +14,8 @@ RUN apk add --no-cache ffmpeg ca-certificates && \
 COPY --from=build /out/lux-api /usr/local/bin/lux-api
 ENV LUX_OUTPUT_DIR=/data/downloads \
     LUX_WORKERS=4 \
-    LUX_ADDR=:8080
+    LUX_ADDR=:8080 \
+    LUX_SERVER_URL=http://localhost:8080
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["/usr/local/bin/lux-api"]

@@ -54,9 +54,10 @@ curl -X DELETE http://localhost:8080/jobs/$ID
 
 | Env var          | Default          | Purpose                       |
 | ---------------- | ---------------- | ----------------------------- |
-| `LUX_ADDR`       | `:8080`          | HTTP listen address           |
-| `LUX_OUTPUT_DIR` | `/data/downloads`| Where finished files land     |
-| `LUX_WORKERS`    | `4`              | Concurrent download workers   |
+| `LUX_ADDR`       | `:8080`                  | HTTP listen address                            |
+| `LUX_SERVER_URL` | `http://localhost:8080`  | Public base URL shown in Swagger + `/` UI      |
+| `LUX_OUTPUT_DIR` | `/data/downloads`        | Where finished files land                      |
+| `LUX_WORKERS`    | `4`                      | Concurrent download workers                    |
 
 ## Notes
 

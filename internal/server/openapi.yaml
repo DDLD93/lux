@@ -13,7 +13,7 @@ info:
     not accept a `context.Context`, so an in-flight HTTP transfer will end on
     its own before the job is marked `canceled`.
 servers:
-  - url: http://localhost:8080
+  - url: ${LUX_SERVER_URL}
 paths:
   /healthz:
     get:
