@@ -16,7 +16,9 @@
       "Bash(go vet *)",
       "Bash(grep -rn \"basejs\" \"$\\(go env GOMODCACHE\\)/github.com/iawia002/lux@v0.24.1/\")",
       "Bash(grep -rni \"basejs\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube\")",
-      "Bash(grep -n \"basejs\\\\|player_ias\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube/v2@v2.10.6/player_parse.go\")"
+      "Bash(grep -n \"basejs\\\\|player_ias\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube/v2@v2.10.6/player_parse.go\")",
+      "Bash(cd \"$\\(go env GOMODCACHE\\)/github.com/iawia002/lux@v0.24.1\")",
+      "Bash(grep -rn \"exec.Command\\\\|exec.LookPath\\\\|ffmpeg\\\\|ffprobe\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube/v2@v2.10.6\")"
     ]
   }
 }
