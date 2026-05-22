@@ -6,8 +6,9 @@ info:
     HTTP wrapper around the [lux](https://github.com/iawia002/lux) video
     download library. Submit a URL to `POST /jobs`, then poll
     `GET /jobs/{id}` until `state == done` and fetch the file from
-    `GET /jobs/{id}/file`. Job state is held in memory and is lost when the
-    container restarts.
+    `GET /jobs/{id}/file` — which redirects (`302`) to a short-lived
+    presigned URL pointing at the MinIO/S3 object. Job state is stored in
+    Postgres and survives restarts.
 
     Cancellation (`DELETE /jobs/{id}`) is best-effort: lux's downloader does
     not accept a `context.Context`, so an in-flight HTTP transfer will end on
@@ -95,13 +96,13 @@ paths:
     parameters:
       - $ref: '#/components/parameters/JobID'
     get:
-      summary: Download the resulting file (only when state=done)
+      summary: Redirect to a presigned MinIO URL for the result (only when state=done)
       responses:
-        '200':
-          description: File stream
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
+        '302':
+          description: Redirect to presigned download URL
+          headers:
+            Location:
+              schema: { type: string, format: uri }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
 
@@ -168,13 +169,16 @@ components:
         url: { type: string, format: uri }
         state:
           type: string
-          enum: [queued, extracting, downloading, done, failed, canceled]
+          enum: [queued, extracting, downloading, uploading, done, failed, canceled]
         percent: { type: number, format: float, minimum: 0, maximum: 100 }
         bytes_downloaded: { type: integer, format: int64 }
         bytes_total: { type: integer, format: int64 }
         title: { type: string }
         site: { type: string }
+        stream: { type: string }
         output_filename: { type: string }
+        output_object_key: { type: string, description: "MinIO/S3 object key" }
         error: { type: string }
+        playlist: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

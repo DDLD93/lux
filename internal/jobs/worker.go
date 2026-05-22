@@ -4,29 +4,38 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/iawia002/lux/downloader"
 	"github.com/iawia002/lux/extractors"
+
+	"github.com/umarj/lux-api/internal/storage"
 )
 
 type Pool struct {
-	store   *Store
-	baseDir string
-	queue   chan string
-	workers int
-	stopCh  chan struct{}
+	store    *Store
+	storage  *storage.Client
+	scratch  string
+	queue    chan string
+	workers  int
+	stopCh   chan struct{}
+	cancelMu sync.Mutex
+	cancels  map[string]context.CancelFunc
 }
 
-func NewPool(store *Store, baseDir string, workers int) *Pool {
+func NewPool(store *Store, st *storage.Client, scratchDir string, workers int) *Pool {
 	return &Pool{
 		store:   store,
-		baseDir: baseDir,
+		storage: st,
+		scratch: scratchDir,
 		queue:   make(chan string, 1024),
 		workers: workers,
 		stopCh:  make(chan struct{}),
+		cancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -40,26 +49,45 @@ func (p *Pool) Stop() { close(p.stopCh) }
 
 func (p *Pool) Submit(id string) { p.queue <- id }
 
-func (p *Pool) Cancel(id string) error {
-	j, err := p.store.Get(id)
+// Cancel signals an in-flight worker to stop. If the job is not running on
+// this instance, it just marks the row canceled if not yet terminal.
+func (p *Pool) Cancel(ctx context.Context, id string) error {
+	j, err := p.store.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	j.cancel()
-	// Best-effort wait for the worker to exit if it had started.
-	select {
-	case <-j.done:
-	case <-time.After(3 * time.Second):
+
+	p.cancelMu.Lock()
+	cancel, running := p.cancels[id]
+	p.cancelMu.Unlock()
+	if running {
+		cancel()
 	}
-	j.update(func(j *Job) {
+
+	// Best-effort: clean up the MinIO object if the file was already uploaded.
+	if j.OutputObjectKey != "" && p.storage != nil {
+		_ = p.storage.Delete(ctx, j.OutputObjectKey)
+	}
+
+	_, err = p.store.Update(ctx, id, func(j *Job) {
 		if j.State != StateDone && j.State != StateFailed {
 			j.State = StateCanceled
 		}
+		j.OutputObjectKey = ""
 	})
-	if j.OutputDir != "" {
-		_ = os.RemoveAll(j.OutputDir)
-	}
-	return nil
+	return err
+}
+
+func (p *Pool) registerCancel(id string, cancel context.CancelFunc) {
+	p.cancelMu.Lock()
+	p.cancels[id] = cancel
+	p.cancelMu.Unlock()
+}
+
+func (p *Pool) clearCancel(id string) {
+	p.cancelMu.Lock()
+	delete(p.cancels, id)
+	p.cancelMu.Unlock()
 }
 
 func (p *Pool) loop() {
@@ -74,63 +102,64 @@ func (p *Pool) loop() {
 }
 
 func (p *Pool) run(id string) {
-	j, err := p.store.Get(id)
-	if err != nil {
-		return
-	}
-	defer close(j.done)
+	ctx, cancel := context.WithCancel(context.Background())
+	p.registerCancel(id, cancel)
+	defer func() {
+		cancel()
+		p.clearCancel(id)
+	}()
+
 	defer func() {
 		if r := recover(); r != nil {
-			fail(j, fmt.Errorf("panic: %v", r))
+			p.fail(ctx, id, fmt.Errorf("panic: %v", r))
 		}
 	}()
 
-	if j.ctx.Err() != nil {
-		j.update(func(j *Job) { j.State = StateCanceled })
+	j, err := p.store.Get(ctx, id)
+	if err != nil {
+		log.Printf("job %s: load: %v", id, err)
 		return
 	}
 
-	jobDir := filepath.Join(p.baseDir, j.ID)
+	jobDir := filepath.Join(p.scratch, j.ID)
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
-		fail(j, fmt.Errorf("mkdir job dir: %w", err))
+		p.fail(ctx, id, fmt.Errorf("mkdir job dir: %w", err))
 		return
 	}
-	j.update(func(j *Job) { j.OutputDir = jobDir })
+	defer os.RemoveAll(jobDir)
 
-	d := j.Data
-	streamKey := j.StreamKey
-	if d == nil {
-		// Fallback: extraction wasn't done up-front. This path also handles
-		// any future callers that submit jobs without pre-resolving.
-		j.update(func(j *Job) { j.State = StateExtracting })
-		data, key, err := Resolve(j.Req)
-		if err != nil {
-			fail(j, err)
-			return
-		}
-		d = data
-		streamKey = key
-		j.update(func(j *Job) {
-			j.Data = d
-			j.StreamKey = key
-			j.Title = d.Title
-			j.Site = d.Site
-			if s := d.Streams[key]; s != nil {
-				j.BytesTotal = s.Size
-			}
-		})
+	// Re-resolve streams in the worker — extractors.Data is not safely
+	// serializable and the createJob handler only persists derived metadata.
+	if _, err := p.store.Update(ctx, id, func(j *Job) { j.State = StateExtracting }); err != nil {
+		log.Printf("job %s: update extracting: %v", id, err)
 	}
 
-	j.update(func(j *Job) { j.State = StateDownloading })
+	data, streamKey, err := Resolve(j.Request())
+	if err != nil {
+		p.fail(ctx, id, err)
+		return
+	}
 
-	progressCtx, stopProgress := context.WithCancel(j.ctx)
-	go trackProgress(progressCtx, j, jobDir)
+	if _, err := p.store.Update(ctx, id, func(j *Job) {
+		j.State = StateDownloading
+		j.Title = data.Title
+		j.Site = data.Site
+		j.StreamKey = streamKey
+		if s := data.Streams[streamKey]; s != nil {
+			j.BytesTotal = s.Size
+		}
+	}); err != nil {
+		log.Printf("job %s: update downloading: %v", id, err)
+	}
+
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	go p.trackProgress(progressCtx, id, jobDir)
 
 	dl := downloader.New(downloader.Options{
 		OutputPath:   jobDir,
-		OutputName:   d.Title,
+		OutputName:   data.Title,
 		Stream:       streamKey,
-		Refer:        d.URL,
+		Refer:        data.URL,
 		Silent:       true,
 		MultiThread:  true,
 		ThreadNumber: 4,
@@ -145,36 +174,66 @@ func (p *Pool) run(id string) {
 				doneCh <- fmt.Errorf("download panic: %v", r)
 			}
 		}()
-		doneCh <- dl.Download(d)
+		doneCh <- dl.Download(data)
 	}()
 
 	select {
 	case err = <-doneCh:
-	case <-j.ctx.Done():
+	case <-ctx.Done():
 		stopProgress()
-		// Wait briefly for the downloader to unwind; lux doesn't accept a
-		// context, so the in-flight HTTP transfer will end on its own.
 		<-doneCh
-		j.update(func(j *Job) { j.State = StateCanceled })
+		_, _ = p.store.Update(ctx, id, func(j *Job) { j.State = StateCanceled })
 		return
 	}
 	stopProgress()
 
 	if err != nil {
-		fail(j, fmt.Errorf("download: %w", err))
+		p.fail(context.Background(), id, fmt.Errorf("download: %w", err))
 		return
 	}
 
 	outName := findOutput(jobDir)
-	j.update(func(j *Job) {
+	if outName == "" {
+		p.fail(context.Background(), id, fmt.Errorf("no output file produced"))
+		return
+	}
+	outPath := filepath.Join(jobDir, outName)
+
+	if _, err := p.store.Update(ctx, id, func(j *Job) { j.State = StateUploading }); err != nil {
+		log.Printf("job %s: update uploading: %v", id, err)
+	}
+
+	objectKey := "jobs/" + id + "/" + outName
+	contentType := mime.TypeByExtension(filepath.Ext(outName))
+	uploadCtx, cancelUpload := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancelUpload()
+	if err := p.storage.UploadFile(uploadCtx, objectKey, outPath, contentType); err != nil {
+		p.fail(context.Background(), id, fmt.Errorf("upload: %w", err))
+		return
+	}
+
+	info, _ := os.Stat(outPath)
+	var size int64
+	if info != nil {
+		size = info.Size()
+	}
+
+	if _, err := p.store.Update(context.Background(), id, func(j *Job) {
 		j.State = StateDone
 		j.Percent = 100
 		j.OutputFilename = outName
-		if j.BytesTotal == 0 {
-			j.BytesTotal = j.BytesDownloaded
+		j.OutputObjectKey = objectKey
+		if size > 0 {
+			j.BytesDownloaded = size
+			if j.BytesTotal == 0 {
+				j.BytesTotal = size
+			}
 		}
-	})
-	log.Printf("job %s done: %s", j.ID, outName)
+	}); err != nil {
+		log.Printf("job %s: update done: %v", id, err)
+		return
+	}
+	log.Printf("job %s done: %s -> %s", id, outName, objectKey)
 }
 
 func safeExtract(req Request) (data []*extractors.Data, err error) {
@@ -190,8 +249,6 @@ func safeExtract(req Request) (data []*extractors.Data, err error) {
 }
 
 // Resolve runs lux's extractor synchronously and returns the chosen Data + stream key.
-// Surfaces every failure mode as an error so callers can return a proper HTTP response
-// instead of accepting an unrunnable job.
 func Resolve(req Request) (*extractors.Data, string, error) {
 	data, err := safeExtract(req)
 	if err != nil {
@@ -217,12 +274,15 @@ func Resolve(req Request) (*extractors.Data, string, error) {
 	return d, key, nil
 }
 
-func fail(j *Job, err error) {
-	log.Printf("job %s failed: %v", j.ID, err)
-	j.update(func(j *Job) {
+func (p *Pool) fail(ctx context.Context, id string, err error) {
+	log.Printf("job %s failed: %v", id, err)
+	_, uerr := p.store.Update(ctx, id, func(j *Job) {
 		j.State = StateFailed
 		j.Error = err.Error()
 	})
+	if uerr != nil {
+		log.Printf("job %s: failed to record failure: %v", id, uerr)
+	}
 }
 
 func bestStream(d *extractors.Data) string {
@@ -239,7 +299,7 @@ func bestStream(d *extractors.Data) string {
 	return bestKey
 }
 
-func trackProgress(ctx context.Context, j *Job, dir string) {
+func (p *Pool) trackProgress(ctx context.Context, id, dir string) {
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -248,14 +308,14 @@ func trackProgress(ctx context.Context, j *Job, dir string) {
 			return
 		case <-t.C:
 			n := dirSize(dir)
-			j.update(func(j *Job) {
+			_, _ = p.store.Update(ctx, id, func(j *Job) {
 				j.BytesDownloaded = n
 				if j.BytesTotal > 0 {
-					p := float64(n) / float64(j.BytesTotal) * 100
-					if p > 99.9 {
-						p = 99.9
+					pct := float64(n) / float64(j.BytesTotal) * 100
+					if pct > 99.9 {
+						pct = 99.9
 					}
-					j.Percent = p
+					j.Percent = pct
 				}
 			})
 		}

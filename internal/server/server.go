@@ -9,19 +9,21 @@ import (
 	"runtime/debug"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/swaggest/swgui/v5emb"
 
 	"github.com/umarj/lux-api/internal/jobs"
+	"github.com/umarj/lux-api/internal/storage"
 )
 
 //go:embed openapi.yaml index.html ui.html
 var assetsFS embed.FS
 
-func New(store *jobs.Store, pool *jobs.Pool, outDir, serverURL string) http.Handler {
-	h := &handlers{store: store, pool: pool, outDir: outDir}
+func New(store *jobs.Store, pool *jobs.Pool, st *storage.Client, presignTTL time.Duration, serverURL string) http.Handler {
+	h := &handlers{store: store, pool: pool, storage: st, presignTTL: presignTTL}
 
 	specRaw, _ := fs.ReadFile(assetsFS, "openapi.yaml")
 	spec := []byte(strings.ReplaceAll(string(specRaw), "${LUX_SERVER_URL}", serverURL))

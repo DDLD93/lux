@@ -5,22 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/iawia002/lux/extractors"
 
 	"github.com/umarj/lux-api/internal/jobs"
+	"github.com/umarj/lux-api/internal/storage"
 )
 
 const maxBodyBytes = 64 * 1024
 
 type handlers struct {
-	store  *jobs.Store
-	pool   *jobs.Pool
-	outDir string
+	store       *jobs.Store
+	pool        *jobs.Pool
+	storage     *storage.Client
+	presignTTL  time.Duration
 }
 
 func decodeRequest(r *http.Request) (jobs.Request, error) {
@@ -54,35 +55,32 @@ func (h *handlers) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	j := h.store.Create(req)
-	j.Data = data
-	j.StreamKey = streamKey
-	j.Title = data.Title
-	j.Site = data.Site
+	var bytesTotal int64
 	if s := data.Streams[streamKey]; s != nil {
-		j.BytesTotal = s.Size
+		bytesTotal = s.Size
+	}
+	j, err := h.store.Create(r.Context(), req, data.Title, data.Site, streamKey, bytesTotal)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.pool.Submit(j.ID)
-	writeJSON(w, http.StatusAccepted, j.Snapshot())
+	writeJSON(w, http.StatusAccepted, j)
 }
 
-func (h *handlers) listJobs(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, h.store.List())
+func (h *handlers) listJobs(w http.ResponseWriter, r *http.Request) {
+	list, err := h.store.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (h *handlers) getJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	snap, err := h.store.Snapshot(id)
+	j, err := h.store.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "job not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, snap)
-}
-
-func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := h.pool.Cancel(id); err != nil {
 		if errors.Is(err, jobs.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
@@ -90,36 +88,52 @@ func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	snap, err := h.store.Snapshot(id)
+	writeJSON(w, http.StatusOK, j)
+}
+
+func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.pool.Cancel(r.Context(), id); err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	j, err := h.store.Get(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"id": id, "state": string(jobs.StateCanceled)})
 		return
 	}
-	writeJSON(w, http.StatusOK, snap)
+	writeJSON(w, http.StatusOK, j)
 }
 
 func (h *handlers) downloadFile(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	snap, err := h.store.Snapshot(id)
+	j, err := h.store.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "job not found")
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if snap.State != jobs.StateDone {
-		writeError(w, http.StatusConflict, "job not finished (state="+string(snap.State)+")")
+	if j.State != jobs.StateDone {
+		writeError(w, http.StatusConflict, "job not finished (state="+string(j.State)+")")
 		return
 	}
-	if snap.OutputFilename == "" {
-		writeError(w, http.StatusInternalServerError, "no output file recorded for job")
+	if j.OutputObjectKey == "" {
+		writeError(w, http.StatusInternalServerError, "no output object recorded for job")
 		return
 	}
-	path := filepath.Join(h.outDir, snap.ID, snap.OutputFilename)
-	if _, err := os.Stat(path); err != nil {
-		writeError(w, http.StatusGone, "output file no longer available")
+	url, err := h.storage.PresignGet(r.Context(), j.OutputObjectKey, j.OutputFilename, h.presignTTL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="`+snap.OutputFilename+`"`)
-	http.ServeFile(w, r, path)
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func (h *handlers) extract(w http.ResponseWriter, r *http.Request) {

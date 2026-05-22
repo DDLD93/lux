@@ -1,12 +1,6 @@
 package jobs
 
-import (
-	"context"
-	"sync"
-	"time"
-
-	"github.com/iawia002/lux/extractors"
-)
+import "time"
 
 type State string
 
@@ -14,6 +8,7 @@ const (
 	StateQueued      State = "queued"
 	StateExtracting  State = "extracting"
 	StateDownloading State = "downloading"
+	StateUploading   State = "uploading"
 	StateDone        State = "done"
 	StateFailed      State = "failed"
 	StateCanceled    State = "canceled"
@@ -27,51 +22,29 @@ type Request struct {
 }
 
 type Job struct {
-	ID              string    `json:"id"`
-	URL             string    `json:"url"`
-	State           State     `json:"state"`
-	Percent         float64   `json:"percent"`
-	BytesDownloaded int64     `json:"bytes_downloaded"`
-	BytesTotal      int64     `json:"bytes_total"`
-	Title           string    `json:"title,omitempty"`
-	Site            string    `json:"site,omitempty"`
-	OutputFilename  string    `json:"output_filename,omitempty"`
-	OutputDir       string    `json:"-"`
-	Error           string    `json:"error,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-
-	Req       Request            `json:"-"`
-	Data      *extractors.Data   `json:"-"`
-	StreamKey string             `json:"-"`
-	mu        sync.Mutex         `json:"-"`
-	ctx       context.Context    `json:"-"`
-	cancel    context.CancelFunc `json:"-"`
-	done      chan struct{}      `json:"-"`
+	ID               string    `json:"id"`
+	URL              string    `json:"url"`
+	State            State     `json:"state"`
+	Percent          float64   `json:"percent"`
+	BytesDownloaded  int64     `json:"bytes_downloaded"`
+	BytesTotal       int64     `json:"bytes_total"`
+	Title            string    `json:"title,omitempty"`
+	Site             string    `json:"site,omitempty"`
+	StreamKey        string    `json:"stream,omitempty"`
+	OutputFilename   string    `json:"output_filename,omitempty"`
+	OutputObjectKey  string    `json:"output_object_key,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	Playlist         bool      `json:"playlist,omitempty"`
+	Cookie           string    `json:"-"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-func (j *Job) Snapshot() Job {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return Job{
-		ID:              j.ID,
-		URL:             j.URL,
-		State:           j.State,
-		Percent:         j.Percent,
-		BytesDownloaded: j.BytesDownloaded,
-		BytesTotal:      j.BytesTotal,
-		Title:           j.Title,
-		Site:            j.Site,
-		OutputFilename:  j.OutputFilename,
-		Error:           j.Error,
-		CreatedAt:       j.CreatedAt,
-		UpdatedAt:       j.UpdatedAt,
+func (j Job) Request() Request {
+	return Request{
+		URL:      j.URL,
+		Stream:   j.StreamKey,
+		Playlist: j.Playlist,
+		Cookie:   j.Cookie,
 	}
-}
-
-func (j *Job) update(fn func(*Job)) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	fn(j)
-	j.UpdatedAt = time.Now().UTC()
 }

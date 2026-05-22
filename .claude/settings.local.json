@@ -7,7 +7,16 @@
       "PowerShell(go mod *)",
       "PowerShell(go build *)",
       "PowerShell(go list *)",
-      "PowerShell(go *)"
+      "PowerShell(go *)",
+      "Bash(go env *)",
+      "Bash(go list *)",
+      "Bash(go get *)",
+      "Bash(go mod *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(grep -rn \"basejs\" \"$\\(go env GOMODCACHE\\)/github.com/iawia002/lux@v0.24.1/\")",
+      "Bash(grep -rni \"basejs\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube\")",
+      "Bash(grep -n \"basejs\\\\|player_ias\" \"$\\(go env GOMODCACHE\\)/github.com/kkdai/youtube/v2@v2.10.6/player_parse.go\")"
     ]
   }
 }
